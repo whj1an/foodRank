@@ -1,0 +1,12 @@
+# OS and IDE
+.DS_Store
+.idea/
+.vscode/
+.claude/
+
+# local
+.vercel
+
+# 网页导出的数据备份（里面有真实的餐厅记录和评价，别传上去）
+*备份*.json
+foodrank-*.json

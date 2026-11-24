@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#fbf7f2">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="从夯到拉">
+  <title>从夯到拉</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- 还没配置数据库 -->
+  <section id="setupView" class="auth" hidden>
+    <div class="auth-card">
+      <h1>还差一步</h1>
+      <p id="setupMsg">还没有连接数据库。请按照 README.md 里的步骤，把 Supabase 的 URL 和 key 填进 config.js。</p>
+    </div>
+  </section>
+
+  <!-- 登录 / 注册 -->
+  <section id="authView" class="auth" hidden>
+    <div class="auth-card">
+      <h1>餐厅的从夯到拉</h1>
+      <p class="muted">登录后就可以给餐厅评级、写下你的见解。</p>
+      <div class="tabs" role="tablist">
+        <button type="button" data-mode="login" class="active">登录</button>
+        <button type="button" data-mode="signup">注册</button>
+      </div>
+      <form id="authForm" novalidate>
+        <label>账号<span class="signup-only hint-inline" hidden>（只能用英文字母和数字，3–20 位）</span>
+          <input name="account" maxlength="20" autocomplete="username" autocapitalize="none" spellcheck="false" inputmode="latin">
+          <span class="field-msg" data-for="account" aria-live="polite"></span>
+        </label>
+        <label class="signup-only" hidden>用户名（可选，大家看到的名字；不填就显示账号）
+          <input name="username" maxlength="20" autocomplete="nickname">
+          <span class="field-msg" data-for="username" aria-live="polite"></span>
+        </label>
+        <label>密码（至少 6 位）
+          <input name="password" type="password" minlength="6" autocomplete="current-password">
+        </label>
+        <button class="primary" type="submit" id="authSubmit">登录</button>
+        <p id="authMsg" class="small muted" aria-live="polite"></p>
+      </form>
+      <button type="button" id="browseBtn" class="ghost back">← 先不登录，随便看看</button>
+    </div>
+  </section>
+
+  <!-- 主界面 -->
+  <div id="appView" hidden>
+    <header class="top">
+      <div class="wrap">
+        <div class="userbar">
+          <span class="signed-in-only" hidden><span id="meName"></span><span id="meRole" class="badge"></span></span>
+          <button id="renameBtn" class="ghost signed-in-only" hidden>改用户名</button>
+          <button id="logoutBtn" class="ghost signed-in-only" hidden>退出</button>
+          <button id="loginBtn" class="ghost strong visitor-only" hidden>登录 / 注册</button>
+        </div>
+        <h1>餐厅的从夯到拉</h1>
+        <p class="sub" id="subtitle">我们俩吃过的渥太华餐厅</p>
+        <div class="stats" id="stats"></div>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <div id="migrateBanner" class="banner" hidden>
+        <span>这个浏览器里还有 <b id="migrateCount"></b> 条旧版本的本地记录。</span>
+        <button id="migrateBtn" class="primary">上传到云端</button>
+        <button id="migrateDismiss" class="ghost">不用了</button>
+      </div>
+      <p id="friendHint" class="hint" hidden>你是以朋友身份登录的：可以给任何一家餐厅评级、写下你的见解。</p>
+      <p id="visitorHint" class="hint" hidden>你现在是游客，可以随便看。想评级、写见解，请先 <button class="ghost strong" data-act="login">登录 / 注册</button></p>
+
+      <div class="style-row">
+        <span class="muted small">评级样式</span>
+        <div class="seg" id="styleSeg" role="radiogroup" aria-label="评级样式">
+          <button type="button" data-style="tier" role="radio">夯 → 拉</button>
+          <button type="button" data-style="letter" role="radio">A → F</button>
+          <button type="button" data-style="number" role="radio">10 → 1</button>
+        </div>
+        <details class="legend">
+          <summary>对照表</summary>
+          <div id="legend"></div>
+        </details>
+      </div>
+
+      <div class="toolbar">
+        <input id="search" type="search" placeholder="搜索餐厅、菜名、见解…">
+        <select id="filterArea" aria-label="按区域筛选"><option value="">所有区域</option></select>
+        <select id="filterCuisine" aria-label="按菜系筛选"><option value="">所有菜系</option></select>
+        <select id="sortBy" aria-label="排序">
+          <option value="score">按综合评级排名</option>
+          <option value="friends">按朋友评级</option>
+          <option value="date">按最近去过</option>
+          <option value="gap">按意见分歧</option>
+          <option value="name">按名字</option>
+        </select>
+        <button id="addBtn" class="primary owner-only">+ 添加餐厅</button>
+      </div>
+
+      <div id="list" class="list"></div>
+
+      <div id="empty" class="empty" hidden>
+        <div class="empty-icon">🍜</div>
+        <p id="emptyText">还没有记录。把你们一起去过的第一家餐厅加进来吧。</p>
+        <button class="primary owner-only" data-act="add">+ 添加第一家</button>
+      </div>
+      <p id="noMatch" class="empty muted" hidden>没有符合条件的餐厅。</p>
+    </main>
+
+    <footer class="wrap foot">
+      <button id="exportBtn" class="owner-only">导出备份</button>
+      <label class="btn owner-only">导入旧版备份<input id="importFile" type="file" accept="application/json,.json" hidden></label>
+      <button id="refreshBtn">刷新</button>
+      <span class="muted small">数据保存在云端，手机和电脑看到的是同一份。</span>
+    </footer>
+  </div>
+
+  <!-- 添加 / 编辑餐厅 -->
+  <dialog id="editDialog">
+    <form id="editForm">
+      <h2 id="editTitle">添加餐厅</h2>
+      <label class="full">餐厅名 *
+        <input name="name" required maxlength="80" placeholder="例如：Shawarma Palace">
+      </label>
+      <label>区域
+        <input name="area" list="areaList" maxlength="40" placeholder="ByWard Market">
+      </label>
+      <label>菜系
+        <input name="cuisine" list="cuisineList" maxlength="40" placeholder="中东 / Shawarma">
+      </label>
+      <label>人均价格
+        <select name="price">
+          <option value="1">$ · 20 以内</option>
+          <option value="2" selected>$$ · 20–40</option>
+          <option value="3">$$$ · 40–70</option>
+          <option value="4">$$$$ · 70+</option>
+        </select>
+      </label>
+      <label>最近一次去
+        <input name="last_visit" type="date">
+      </label>
+      <label>一起去过几次
+        <input name="visits" type="number" min="1" max="999" value="1">
+      </label>
+      <label>还会再去吗
+        <select name="again">
+          <option value="yes">💯 必须再去</option>
+          <option value="maybe" selected>🙂 有机会再去</option>
+          <option value="no">🙅 不会再去了</option>
+        </select>
+      </label>
+
+      <div class="full owner-scores" id="ownerScores"></div>
+
+      <label class="full">推荐菜（用逗号分隔）
+        <input name="dishes" maxlength="200" placeholder="牛肉卷饼, 蒜酱薯条">
+      </label>
+      <label class="full">地址（可选，用于打开地图）
+        <input name="address" maxlength="120" placeholder="464 Rideau St">
+      </label>
+      <label class="full">备注
+        <textarea name="notes" rows="3" maxlength="1000" placeholder="环境、服务、那天发生的小事…"></textarea>
+      </label>
+
+      <div class="actions full">
+        <button type="button" data-close>取消</button>
+        <button type="submit" class="primary">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- 写见解（所有登录的人） -->
+  <dialog id="reviewDialog">
+    <form id="reviewForm">
+      <h2 id="reviewTitle">写见解</h2>
+      <div class="full">
+        <div class="field-title">我的评级</div>
+        <div id="reviewLevels"></div>
+      </div>
+      <label class="full">我的见解（可选）
+        <textarea name="comment" rows="4" maxlength="1000" placeholder="推荐什么菜、什么时候去人少、值不值这个价…"></textarea>
+      </label>
+      <div class="actions full">
+        <button type="button" id="reviewDelete" class="danger" hidden>删除我的见解</button>
+        <span class="spacer"></span>
+        <button type="button" data-close>取消</button>
+        <button type="submit" class="primary">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- 改用户名 -->
+  <dialog id="renameDialog">
+    <form id="renameForm">
+      <h2>改用户名</h2>
+      <label class="full"><span id="renameHint">用户名（留空就显示账号）</span>
+        <input name="username" maxlength="20">
+        <span class="field-msg" data-for="rename" aria-live="polite"></span>
+      </label>
+      <div class="actions full">
+        <button type="button" data-close>取消</button>
+        <button type="submit" class="primary">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+
+  <datalist id="areaList"></datalist>
+  <datalist id="cuisineList"></datalist>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
