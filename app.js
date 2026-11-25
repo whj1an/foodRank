@@ -4,6 +4,7 @@
    从夯到拉 · 前端逻辑
    数据在 Supabase：profiles（用户）/ restaurants（餐厅）/ reviews（每人的评级和见解）
    评级在数据库里存 1–10，网页上可以切换成「夯拉 / 字母 / 数字」三种样式显示。
+   首页是一张 tier list：每个等级一行，还没评完的放在下面的「待评」区。
    ===================================================================== */
 
 const cfg = window.FOODRANK_CONFIG || {};
@@ -26,6 +27,7 @@ const LEVELS = [
 const LEVELS_BEST_FIRST = [10, 9, 8, 7, 6, 5, 4, 3, 2, 1];
 const STYLES = ['tier', 'letter', 'number'];
 const STYLE_KEY = 'foodrank.ratingStyle';
+const VIEW_KEY = 'foodrank.boardView';
 
 /* ---------- 其他常量 ---------- */
 const OTTAWA_AREAS = [
@@ -37,19 +39,20 @@ const CUISINES = [
   '中餐', '川菜', '粤菜 / 早茶', '火锅', '烧烤', '日料', '韩餐', '越南菜', '泰餐', '印度菜',
   '中东 / Shawarma', '意大利菜', '法餐', '美式 / 汉堡', '墨西哥菜', '海鲜', '早午餐', '甜品 / 咖啡',
 ];
-const AGAIN = { yes: '💯 必须再去', maybe: '🙂 有机会再去', no: '🙅 不会再去了' };
-const MEDALS = ['🥇', '🥈', '🥉'];
+const AGAIN = { yes: '必须再去', maybe: '有机会再去', no: '不会再去了' };
 const LEGACY_KEY = 'foodrank.v1';
 const MIGRATED_KEY = 'foodrank.migrated';
 const ACCOUNT_RE = /^[a-z0-9]{3,20}$/;
 // Supabase 登录必须用邮箱，所以把「账号」转成一个内部邮箱（不会真的发邮件）
 const ACCOUNT_EMAIL_DOMAIN = cfg.accountEmailDomain || 'fromhang2la.app';
+const TAGLINE = '吃过的渥太华餐厅';
 
 /* ---------- 状态 ---------- */
 let sb = null;
 const state = { user: null, me: null, profiles: [], restaurants: [], reviews: [], loaded: false, loadedAt: 0 };
 let editingId = null;
 let reviewingId = null;
+let detailId = null;
 let authMode = 'login';
 
 /* ---------- 工具 ---------- */
@@ -68,6 +71,7 @@ function lsGet(key) { try { return localStorage.getItem(key); } catch { return n
 function lsSet(key, v) { try { localStorage.setItem(key, v); } catch { /* 无痕模式等 */ } }
 
 let ratingStyle = STYLES.includes(lsGet(STYLE_KEY)) ? lsGet(STYLE_KEY) : 'tier';
+let boardView = lsGet(VIEW_KEY) || 'couple'; // 'couple' | 'friends' | 某个 owner 的 id
 
 // 某个等级在当前样式下的文字
 function levelLabel(level, style = ratingStyle) {
@@ -78,6 +82,9 @@ function levelLabel(level, style = ratingStyle) {
 function scoreLabel(avg) {
   return ratingStyle === 'number' ? fmt(avg) : levelLabel(toLevel(avg));
 }
+const pill = (score, cls = 'pill') => score == null
+  ? `<span class="${cls} lv-none">还没评</span>`
+  : `<span class="${cls} lv-${toLevel(score)}">${esc(scoreLabel(score))}</span>`;
 
 let toastTimer;
 function toast(msg, isError = false) {
@@ -145,6 +152,30 @@ function summarize(r) {
   };
 }
 
+// 在当前「看谁的榜」下，这家餐厅的分数；null = 放进待评区（note 说明还差谁）
+function placeOf(s) {
+  const os = owners();
+  if (boardView === 'friends') return { score: s.friendAvg, note: '' };
+  if (boardView !== 'couple') {
+    const i = os.findIndex((o) => o.id === boardView);
+    return { score: i >= 0 ? s.ownerScores[i] : null, note: '' };
+  }
+  if (!os.length) return { score: null, note: '' };
+  const missing = os.filter((_, i) => s.ownerScores[i] == null);
+  if (!missing.length) return { score: s.couple, note: '' };
+  const note = missing.length < os.length ? '还差 ' + missing.map(shownName).join('、') : '';
+  return { score: null, note };
+}
+
+function viewOptions() {
+  const os = owners();
+  const opts = [];
+  if (os.length) opts.push({ id: 'couple', label: os.length > 1 ? '我们俩' : shownName(os[0]) });
+  if (os.length > 1) os.forEach((o) => opts.push({ id: o.id, label: shownName(o) }));
+  opts.push({ id: 'friends', label: '朋友们' });
+  return opts;
+}
+
 /* ---------- 名字是否被占用（注册 / 改名时提前检查，数据库里也有唯一约束兜底） ---------- */
 async function fetchNames() {
   return must(sb.from('profiles').select('id, account, username'));
@@ -200,6 +231,7 @@ async function onSession(session) {
 }
 
 function openAuth(mode, msg = '') {
+  closeDetail();
   setAuthMode(mode);
   $('#authMsg').textContent = msg;
   show('authView');
@@ -225,7 +257,21 @@ function setAuthMode(mode) {
   $('#authMsg').textContent = '';
   setFieldMsg(authForm, 'account', '');
   setFieldMsg(authForm, 'username', '');
+  setFieldMsg(authForm, 'password2', '');
+  authForm.elements.password2.value = '';
 }
+
+// 注册时检查两次密码是否一致（第二个框有内容后才提示）
+function checkPasswordMatch() {
+  if (authMode !== 'signup') return true;
+  const { password, password2 } = authForm.elements;
+  if (!password2.value) { setFieldMsg(authForm, 'password2', ''); return false; }
+  const same = password.value === password2.value;
+  setFieldMsg(authForm, 'password2', same ? '✓ 两次一致' : '两次输入的密码不一样', same);
+  return same;
+}
+authForm.elements.password.addEventListener('input', checkPasswordMatch);
+authForm.elements.password2.addEventListener('input', checkPasswordMatch);
 
 // 注册时边输入边检查账号 / 用户名
 let checkTimer;
@@ -282,6 +328,8 @@ authForm.addEventListener('submit', (e) => {
     const username = clip(f.username.value, 20);
     if (!/^[A-Za-z0-9]{3,20}$/.test(rawAccount)) throw new Error('账号只能用英文字母和数字，3–20 位');
     if (password.length < 6) throw new Error('密码至少 6 位');
+    if (!f.password2.value) throw new Error('请再输一遍密码确认');
+    if (!checkPasswordMatch()) throw new Error('两次输入的密码不一样');
     const rows = await fetchNames();
     if (accountTaken(rows, account)) {
       setFieldMsg(authForm, 'account', '这个账号已经被注册了，换一个吧');
@@ -304,7 +352,9 @@ authForm.addEventListener('submit', (e) => {
       throw new Error('账号建好了，但网站还开着「邮箱确认」，暂时登录不了。请站长在 Supabase 里关掉 Confirm email。');
     }
     f.password.value = '';
-    toast(`注册成功，欢迎 ${username || account}！`);
+    f.password2.value = '';
+    setFieldMsg(authForm, 'password2', '');
+    toast(`注册成功，欢迎 ${username || account}`);
   });
 });
 
@@ -314,7 +364,7 @@ $('#browseBtn').addEventListener('click', () => show('appView'));
 
 /* ---------- 读数据 ---------- */
 async function loadAll({ quiet = false } = {}) {
-  if (!quiet && !state.loaded) $('#list').innerHTML = '<p class="muted loading">加载中…</p>';
+  if (!quiet && !state.loaded) $('#board').innerHTML = '<p class="muted small" style="padding:16px">加载中…</p>';
   try {
     const [profiles, restaurants, reviews] = await Promise.all([
       must(sb.from('profiles').select('id, account, username, role, created_at')),
@@ -355,27 +405,22 @@ document.querySelectorAll('#styleSeg button').forEach((b) => b.addEventListener(
   render();
 }));
 
-// 10 个等级的选择器（单选按钮）
+// 10 个等级的选择器：竖排，跟榜单一样，等于「把它放进哪一档」
 function levelPicker(name, value, disabled = false) {
-  return `<div class="levels" role="radiogroup">${LEVELS_BEST_FIRST.map((l) => `
-    <label class="lv-chip lv-${l}" title="${esc(`${levelLabel(l, 'tier')} · ${levelLabel(l, 'letter')} · ${l}`)}">
+  const other = (l) => [levelLabel(l, 'tier'), levelLabel(l, 'letter'), String(l)]
+    .filter((x) => x !== levelLabel(l)).join(' · ');
+  return `<div class="picker" role="radiogroup">${LEVELS_BEST_FIRST.map((l) => `
+    <label class="pick lv-${l}">
       <input type="radio" name="${name}" value="${l}" ${l === value ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
-      <span>${esc(levelLabel(l))}</span>
+      <span><b>${esc(levelLabel(l))}</b><em>${esc(other(l))}</em></span>
     </label>`).join('')}</div>`;
 }
 const pickedLevel = (form, name) => {
-  const v = form.querySelector(`input[name="${name}"]:checked`)?.value;
+  const v = form.querySelector(`input[type=radio][name="${name}"]:checked`)?.value;
   return v ? Number(v) : null;
 };
 
 /* ---------- 渲染 ---------- */
-function fillSelect(sel, values, allLabel) {
-  const current = sel.value;
-  sel.innerHTML = `<option value="">${allLabel}</option>` +
-    values.map((v) => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
-  sel.value = values.includes(current) ? current : '';
-}
-
 function renderChrome() {
   const signedIn = !!state.me;
   const owner = isOwner();
@@ -384,103 +429,94 @@ function renderChrome() {
   document.querySelectorAll('.owner-only').forEach((el) => (el.hidden = !owner));
   if (signedIn) {
     $('#meName').textContent = shownName(state.me);
-    $('#meName').title = '账号：' + state.me.account;
+    $('#meName').title = `账号：${state.me.account}（点一下改用户名）`;
     $('#meRole').textContent = owner ? '用户' : '朋友';
     $('#meRole').classList.toggle('owner', owner);
   }
   $('#friendHint').hidden = !signedIn || owner;
   $('#visitorHint').hidden = signedIn;
-  $('#emptyText').textContent = owner
-    ? '还没有记录。把你们一起去过的第一家餐厅加进来吧。'
-    : '还没有餐厅记录，过几天再来看看吧。';
 
   const os = owners();
-  if (os.length) {
-    $('#subtitle').innerHTML = os.map((o, i) => `<span class="name${i ? 'B' : 'A'}">${esc(shownName(o))}</span>`).join(' 和 ');
-  }
+  $('#subtitle').textContent = os.length ? `${os.map(shownName).join(' 和 ')} ${TAGLINE}` : TAGLINE;
 
-  fillSelect($('#filterArea'), unique(state.restaurants.map((r) => r.area)), '所有区域');
-  fillSelect($('#filterCuisine'), unique(state.restaurants.map((r) => r.cuisine)), '所有菜系');
   $('#areaList').innerHTML = unique([...OTTAWA_AREAS, ...state.restaurants.map((r) => r.area)]).map((v) => `<option value="${esc(v)}">`).join('');
   $('#cuisineList').innerHTML = unique([...CUISINES, ...state.restaurants.map((r) => r.cuisine)]).map((v) => `<option value="${esc(v)}">`).join('');
 }
 
 function renderStats(sums) {
   const all = [...sums.values()];
-  const rated = all.filter((s) => s.couple != null);
+  const both = all.filter((s) => s.ownerScores.length && s.ownerScores.every((x) => x != null));
   const gaps = all.filter((s) => s.gap != null).map((s) => s.gap);
   const visits = state.restaurants.reduce((n, r) => n + (Number(r.visits) || 1), 0);
   const friendCount = all.reduce((n, s) => n + s.friends.length, 0);
-  const stats = [
-    [state.restaurants.length, '去过的餐厅'],
-    [visits, '一起吃饭的次数'],
-    [rated.length ? esc(scoreLabel(mean(rated.map((s) => s.couple)))) : '–', '平均评级'],
-    [gaps.length ? Math.round(Math.max(0, 100 - mean(gaps) * 10)) + '%' : '–', '口味契合度'],
-    [friendCount, '朋友的见解'],
+  const parts = [
+    `去过 <b>${state.restaurants.length}</b> 家`,
+    `一起吃了 <b>${visits}</b> 次`,
+    both.length ? `平均 <b>${esc(scoreLabel(mean(both.map((s) => s.couple))))}</b>` : null,
+    gaps.length ? `口味契合度 <b>${Math.round(Math.max(0, 100 - mean(gaps) * 10))}%</b>` : null,
+    friendCount ? `朋友的见解 <b>${friendCount}</b> 条` : null,
   ];
-  $('#stats').innerHTML = stats.map(([v, l]) => `<div class="stat"><b>${v}</b><span>${l}</span></div>`).join('');
+  $('#stats').innerHTML = parts.filter(Boolean).join(' · ');
 }
 
-function mapUrl(r) {
-  const q = [r.name, r.address || r.area, 'Ottawa'].filter(Boolean).join(' ');
-  return 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(q);
+function renderViewSeg() {
+  const opts = viewOptions();
+  if (!opts.some((o) => o.id === boardView)) boardView = opts[0].id;
+  $('#viewSeg').innerHTML = opts.map((o) => `
+    <button type="button" role="radio" data-view="${esc(o.id)}" class="${o.id === boardView ? 'active' : ''}"
+      aria-checked="${o.id === boardView}">${esc(o.label)}</button>`).join('');
 }
 
-function card(r, s, rank) {
-  const badge = s.couple != null
-    ? `<div class="score lv-${toLevel(s.couple)} style-${ratingStyle}">${esc(scoreLabel(s.couple))}</div>`
-    : '<div class="score lv-none">待评</div>';
-  const rankLabel = rank ? `<span class="rank">${MEDALS[rank - 1] || '#' + rank}</span>` : '';
-  const meta = [r.area, r.cuisine, '$'.repeat(r.price || 2), r.last_visit, (r.visits || 1) + ' 次']
-    .filter(Boolean).map(esc).join(' · ');
+function searchText(r, s) {
+  return [r.name, r.area, r.cuisine, r.notes, r.address, ...(r.dishes || []), ...s.revs.map((v) => v.comment)]
+    .join(' ').toLowerCase();
+}
 
-  const raters = owners().map((o, i) => {
-    const v = s.ownerScores[i];
-    return `<div class="rater ${i ? 'b' : 'a'}"><span class="who">${esc(shownName(o))}</span>
-      <div class="bar"><i style="width:${v == null ? 0 : v * 10}%"></i></div><b>${v == null ? '–' : esc(levelLabel(v))}</b></div>`;
+function chip(r, place, matched) {
+  const extra = ratingStyle === 'number' && place.score != null ? `<i>${fmt(place.score)}</i>` : '';
+  const note = place.note ? `<i>${esc(place.note)}</i>` : '';
+  const cls = ['chip', matched === false ? 'dim' : '', matched === true ? 'hit' : ''].join(' ').trim();
+  return `<button type="button" class="${cls}" data-act="open" data-id="${r.id}"><span class="nm">${esc(r.name)}</span>${extra}${note}</button>`;
+}
+
+function renderBoard(sums) {
+  const q = $('#search').value.trim().toLowerCase();
+  const rows = new Map(LEVELS_BEST_FIRST.map((l) => [l, []]));
+  const pool = [];
+  let hits = 0;
+  for (const r of state.restaurants) {
+    const s = sums.get(r.id);
+    const place = placeOf(s);
+    const matched = q ? searchText(r, s).includes(q) : null;
+    if (matched) hits++;
+    const entry = { r, place, matched };
+    if (place.score == null) pool.push(entry);
+    else rows.get(toLevel(place.score)).push(entry);
+  }
+  const byScore = (a, b) => (b.place.score - a.place.score) || a.r.name.localeCompare(b.r.name, 'zh');
+  $('#board').innerHTML = LEVELS_BEST_FIRST.map((l) => {
+    const items = rows.get(l).sort(byScore);
+    return `<div class="tier lv-${l}${items.length ? '' : ' empty'}">
+      <div class="label">${esc(levelLabel(l))}</div>
+      <div class="items">${items.map((e) => chip(e.r, e.place, e.matched)).join('')}</div>
+    </div>`;
   }).join('');
 
-  const dishes = (r.dishes || []).map((d) => `<span class="tag">${esc(d)}</span>`).join('');
+  const poolTitle = boardView === 'couple' ? '待评'
+    : boardView === 'friends' ? '朋友还没评'
+      : `${nameOf(boardView)} 还没评`;
+  pool.sort((a, b) => a.r.name.localeCompare(b.r.name, 'zh'));
+  let poolBody = pool.map((e) => chip(e.r, e.place, e.matched)).join('');
+  if (!state.restaurants.length) {
+    poolBody = `<span class="pool-empty">${isOwner()
+      ? '还没有餐厅。点右上角「添加餐厅」，把第一家放上榜。'
+      : '还没有餐厅记录，过几天再来看看吧。'}</span>`;
+  } else if (!pool.length) {
+    poolBody = '<span class="pool-empty">都评完了</span>';
+  }
+  $('#pool').innerHTML = `<span class="pool-title">${esc(poolTitle)}</span>${poolBody}`;
 
-  // 大家的见解：朋友的评价 + 写了文字的评价
-  const voices = s.revs
-    .filter((v) => v.comment || !s.ownerIds.has(v.user_id))
-    .sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
-  const voicesHtml = voices.length ? `
-    <details class="voices">
-      <summary>💬 大家的见解 · ${voices.length} 条${s.friendAvg != null ? ` · 朋友平均 ${esc(scoreLabel(s.friendAvg))}` : ''}</summary>
-      <ul>${voices.map((v) => `
-        <li>
-          <div class="voice-head"><b>${esc(nameOf(v.user_id))}</b>
-            <span class="vscore lv-${v.score}">${esc(levelLabel(Number(v.score)))}</span></div>
-          ${v.comment ? `<p>${esc(v.comment)}</p>` : ''}
-        </li>`).join('')}
-      </ul>
-    </details>` : '';
-
-  const mine = state.me && s.revs.find((v) => v.user_id === state.me.id);
-  return `
-  <article class="card">
-    <div class="card-head">
-      <div class="title">
-        <h3>${rankLabel}${esc(r.name)}</h3>
-        <div class="meta">${meta}</div>
-      </div>
-      ${badge}
-    </div>
-    ${raters ? `<div>${raters}</div>` : ''}
-    ${dishes ? `<div class="tags">${dishes}</div>` : ''}
-    ${r.notes ? `<p class="notes">${esc(r.notes)}</p>` : ''}
-    ${voicesHtml}
-    <div class="card-foot">
-      <span class="again">${AGAIN[r.again] || ''}</span>
-      <a href="${mapUrl(r)}" target="_blank" rel="noopener">地图</a>
-      <button class="ghost strong" data-act="review" data-id="${r.id}">${mine ? '改见解' : '写见解'}</button>
-      ${isOwner() ? `
-        <button class="ghost" data-act="edit" data-id="${r.id}">编辑</button>
-        <button class="ghost" data-act="delete" data-id="${r.id}">删除</button>` : ''}
-    </div>
-  </article>`;
+  $('#searchInfo').textContent = q ? (hits ? `找到 ${hits} 家` : '没找到') : '';
 }
 
 function render() {
@@ -488,57 +524,116 @@ function render() {
   renderChrome();
   const sums = new Map(state.restaurants.map((r) => [r.id, summarize(r)]));
   renderStats(sums);
-
-  const q = $('#search').value.trim().toLowerCase();
-  const area = $('#filterArea').value;
-  const cuisine = $('#filterCuisine').value;
-  const sort = $('#sortBy').value;
-
-  const list = state.restaurants.filter((r) => {
-    if (area && r.area !== area) return false;
-    if (cuisine && r.cuisine !== cuisine) return false;
-    if (!q) return true;
-    const text = [r.name, r.area, r.cuisine, r.notes, r.address, ...(r.dishes || []),
-      ...sums.get(r.id).revs.map((v) => v.comment)].join(' ').toLowerCase();
-    return text.includes(q);
-  });
-
-  const S = (r) => sums.get(r.id);
-  const desc = (a, b) => (b ?? -1) - (a ?? -1); // 空值排最后
-  const byDate = (x, y) => (y.last_visit || '').localeCompare(x.last_visit || '');
-  const byScore = (x, y) => desc(S(x).couple, S(y).couple) || byDate(x, y);
-  const sorters = {
-    score: byScore,
-    friends: (x, y) => desc(S(x).friendAvg, S(y).friendAvg) || byScore(x, y),
-    date: (x, y) => byDate(x, y) || byScore(x, y),
-    gap: (x, y) => desc(S(x).gap, S(y).gap) || byScore(x, y),
-    name: (x, y) => x.name.localeCompare(y.name, 'zh'),
-  };
-  list.sort(sorters[sort]);
-
-  $('#list').innerHTML = list
-    .map((r, i) => card(r, S(r), sort === 'score' && S(r).couple != null ? i + 1 : null))
-    .join('');
-  $('#empty').hidden = state.restaurants.length > 0;
-  $('#noMatch').hidden = !(state.restaurants.length && !list.length);
+  renderViewSeg();
+  renderBoard(sums);
+  if (detailId && $('#detailDialog').open) renderDetail();
 }
+
+$('#viewSeg').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-view]');
+  if (!b) return;
+  boardView = b.dataset.view;
+  lsSet(VIEW_KEY, boardView);
+  render();
+});
+$('#search').addEventListener('input', render);
+
+/* ---------- 详情面板 ---------- */
+function mapUrl(r) {
+  const q = [r.name, r.address || r.area, 'Ottawa'].filter(Boolean).join(' ');
+  return 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(q);
+}
+
+function renderDetail() {
+  const r = state.restaurants.find((x) => x.id === detailId);
+  if (!r) { closeDetail(); return; }
+  const s = summarize(r);
+  const os = owners();
+  const meta = [r.area, r.cuisine, '$'.repeat(r.price || 2), r.last_visit ? '最近 ' + r.last_visit : null, `去过 ${r.visits || 1} 次`]
+    .filter(Boolean).map(esc).join(' · ');
+  const allRated = os.length && s.ownerScores.every((x) => x != null);
+
+  const ownerLines = os.map((o, i) => {
+    const v = s.revs.find((x) => x.user_id === o.id);
+    return `<div class="who-line"><span class="n">${esc(shownName(o))}</span>${pill(s.ownerScores[i])}
+      ${v?.comment ? `<span class="c">${esc(v.comment)}</span>` : ''}</div>`;
+  }).join('');
+
+  const friends = [...s.friends].sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
+  const friendLines = friends.map((v) => `
+    <div class="who-line"><span class="n">${esc(nameOf(v.user_id))}</span>${pill(Number(v.score))}
+      ${v.comment ? `<span class="c">${esc(v.comment)}</span>` : ''}</div>`).join('');
+
+  const mine = state.me && s.revs.find((v) => v.user_id === state.me.id);
+  const reviewBtn = state.me
+    ? `<button class="primary" data-act="review" data-id="${r.id}">${mine ? '改我的见解' : '写见解'}</button>`
+    : `<button class="primary" data-act="login">登录后写见解</button>`;
+
+  $('#detailBody').innerHTML = `
+    <div class="detail">
+      <div class="detail-head">
+        <div class="t">
+          <h2 id="detailName">${esc(r.name)}</h2>
+          <p class="sub">${meta}</p>
+        </div>
+        ${allRated ? pill(s.couple, 'big-pill') : '<span class="big-pill lv-none">待评</span>'}
+        <button class="ghost close" data-close aria-label="关闭">×</button>
+      </div>
+
+      ${os.length ? `<div class="block"><h3>我们俩</h3>${ownerLines}</div>` : ''}
+
+      ${(r.dishes || []).length || r.notes || r.again ? `<div class="block">
+        ${(r.dishes || []).length ? `<p class="text">推荐：${(r.dishes || []).map(esc).join(' · ')}</p>` : ''}
+        ${r.notes ? `<p class="text">${esc(r.notes)}</p>` : ''}
+        ${AGAIN[r.again] ? `<p class="muted small">${AGAIN[r.again]}</p>` : ''}
+      </div>` : ''}
+
+      <div class="block">
+        <h3>朋友说${friends.length ? ` · ${friends.length} 条 · 平均 ${esc(scoreLabel(s.friendAvg))}` : ''}</h3>
+        ${friendLines || '<p class="muted small">还没有朋友评价这家。</p>'}
+      </div>
+
+      <div class="actions">
+        ${reviewBtn}
+        <a class="btn" href="${mapUrl(r)}" target="_blank" rel="noopener">地图</a>
+        ${isOwner() ? `
+          <button data-act="edit" data-id="${r.id}">编辑</button>
+          <button class="danger" data-act="delete" data-id="${r.id}">删除</button>` : ''}
+      </div>
+    </div>`;
+}
+
+function openDetail(id) {
+  detailId = id;
+  renderDetail();
+  const d = $('#detailDialog');
+  if (!d.open) d.showModal();
+}
+function closeDetail() {
+  detailId = null;
+  const d = $('#detailDialog');
+  if (d.open) d.close();
+}
+// 点面板外面的暗色区域也能关
+$('#detailDialog').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeDetail(); });
+$('#detailDialog').addEventListener('close', () => { detailId = null; });
 
 /* ---------- 添加 / 编辑餐厅（owner） ---------- */
 const editForm = $('#editForm');
 
 function ownerScoreRows(r) {
   const os = owners();
-  const rows = os.map((o, i) => {
+  const rows = os.map((o) => {
     const v = r ? state.reviews.find((x) => x.restaurant_id === r.id && x.user_id === o.id) : null;
     const on = r ? !!v : true;
     return `
-      <div class="owner-score ${i ? 'b' : 'a'}">
+      <div class="owner-score">
         <label class="check"><input type="checkbox" name="use_${o.id}" ${on ? 'checked' : ''}>${esc(shownName(o))} 的评级</label>
         ${levelPicker('score_' + o.id, v ? Number(v.score) : null, !on)}
       </div>`;
   }).join('');
   const hint = os.length < 2
-    ? '<p class="small muted">另一位注册并被设成可以管理餐厅后，这里会出现 TA 的评级。</p>'
+    ? '<p class="small muted">另一位注册并被设成用户后，这里会出现 TA 的评级。</p>'
     : '<p class="small muted">取消勾选 = 先不评级，留给 TA 自己来。</p>';
   return rows + hint;
 }
@@ -582,7 +677,7 @@ editForm.addEventListener('submit', (e) => {
   for (const o of owners()) {
     if (!f['use_' + o.id]?.checked) continue;
     const level = pickedLevel(editForm, 'score_' + o.id);
-    if (!level) { toast(`请给「${shownName(o)}」选一个评级，或者取消勾选`, true); return; }
+    if (!level) { toast(`请给「${shownName(o)}」选一档，或者取消勾选`, true); return; }
     scores.push({ user_id: o.id, score: level });
   }
   busy(e.submitter || editForm.querySelector('[type=submit]'), async () => {
@@ -618,7 +713,7 @@ function openReview(r) {
 reviewForm.addEventListener('submit', (e) => {
   e.preventDefault();
   const level = pickedLevel(reviewForm, 'score');
-  if (!level) { toast('先选一个评级吧', true); return; }
+  if (!level) { toast('先选一档吧', true); return; }
   busy(e.submitter || reviewForm.querySelector('[type=submit]'), async () => {
     await must(sb.from('reviews').upsert({
       restaurant_id: reviewingId,
@@ -647,9 +742,14 @@ $('#reviewDelete').addEventListener('click', (e) => {
 document.addEventListener('click', (e) => {
   const el = e.target.closest('[data-act], [data-close]');
   if (!el) return;
-  if (el.hasAttribute('data-close')) return el.closest('dialog').close();
+  if (el.hasAttribute('data-close')) {
+    const d = el.closest('dialog');
+    if (d === $('#detailDialog')) closeDetail(); else d?.close();
+    return;
+  }
   const r = state.restaurants.find((x) => x.id === el.dataset.id);
   switch (el.dataset.act) {
+    case 'open': if (r) openDetail(r.id); break;
     case 'add': if (isOwner()) openEditor(); break;
     case 'edit': if (r && isOwner()) openEditor(r); break;
     case 'review':
@@ -662,6 +762,7 @@ document.addEventListener('click', (e) => {
       if (r && isOwner() && confirm(`确定删除「${r.name}」吗？大家对它的见解也会一起删除。`)) {
         busy(el, async () => {
           await must(sb.from('restaurants').delete().eq('id', r.id));
+          closeDetail();
           toast('已删除');
           await loadAll({ quiet: true });
         });
@@ -671,7 +772,6 @@ document.addEventListener('click', (e) => {
 });
 
 $('#addBtn').addEventListener('click', () => openEditor());
-['#search', '#filterArea', '#filterCuisine', '#sortBy'].forEach((s) => $(s).addEventListener('input', render));
 $('#refreshBtn').addEventListener('click', (e) => busy(e.currentTarget, () => loadAll({ quiet: true })));
 $('#logoutBtn').addEventListener('click', () => sb.auth.signOut());
 
@@ -682,14 +782,17 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
-/* ---------- 改用户名 ---------- */
+/* ---------- 改用户名（点顶栏的名字也可以） ---------- */
 const renameForm = $('#renameForm');
-$('#renameBtn').addEventListener('click', () => {
+function openRename() {
+  if (!state.me) return;
   renameForm.elements.username.value = state.me.username || '';
   $('#renameHint').textContent = `用户名（留空就显示账号「${state.me.account}」）`;
   setFieldMsg(renameForm, 'rename', '');
   $('#renameDialog').showModal();
-});
+}
+$('#renameBtn').addEventListener('click', openRename);
+$('#meName').addEventListener('click', openRename);
 renameForm.addEventListener('submit', (e) => {
   e.preventDefault();
   const username = clip(renameForm.elements.username.value, 20);

@@ -105,6 +105,15 @@ alter table public.profiles    enable row level security;
 alter table public.restaurants enable row level security;
 alter table public.reviews     enable row level security;
 
+-- 表权限（grant）：决定网页能不能碰这张表；上面的 RLS 再决定能碰哪几行。
+-- 有些 Supabase 项目不会自动给新表开权限，所以这里明确写出来，先全部收回再按需给。
+revoke all on public.profiles, public.restaurants, public.reviews from anon, authenticated;
+grant usage on schema public to anon, authenticated;
+grant select on public.profiles, public.restaurants, public.reviews to anon, authenticated;
+grant insert, update, delete on public.restaurants, public.reviews to authenticated;
+grant update (username) on public.profiles to authenticated;   -- 只能改用户名这一列
+grant execute on function public.is_owner(uuid) to anon, authenticated;
+
 -- profiles：大家都能看名字；只能改自己的用户名（账号和角色不能改）
 create policy "profiles: 所有人可读" on public.profiles
   for select to anon, authenticated using (true);
@@ -112,8 +121,6 @@ create policy "profiles: 改自己" on public.profiles
   for update to authenticated
   using (id = (select auth.uid()))
   with check (id = (select auth.uid()));
-revoke update on public.profiles from anon, authenticated;
-grant update (username) on public.profiles to authenticated;
 
 -- restaurants：owner 可增删改
 create policy "restaurants: 所有人可读" on public.restaurants
