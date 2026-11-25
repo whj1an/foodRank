@@ -17,6 +17,7 @@
 | `app.js` | 所有逻辑 |
 | `config.js` | 填 Supabase 的地址和公开 key |
 | `supabase/schema.sql` | 数据库表和权限规则，在 Supabase 里运行一次 |
+| `manifest.webmanifest`、`icons/` | 手机「添加到主屏幕」用的名字和图标 |
 
 ## 评级
 
@@ -93,6 +94,8 @@ python3 -m http.server 5173
 4. 得到一个 `https://xxx.vercel.app` 的网址
 
 以后每次 `git push`，Vercel 会自动更新网站。
+
+> **改了 `style.css` 或 `app.js` 之后**：把 `index.html` 里 `?v=` 后面的数字加 1（比如 `style.css?v=3` → `?v=4`），不然手机浏览器可能一直用旧的缓存。
 
 > 不想用 Git？也可以去 <https://app.netlify.com/drop> 把整个文件夹拖进去，马上得到一个网址。
 

@@ -19,6 +19,7 @@ The site's interface is in Chinese. "夯" (hāng) to "拉" (lā) is Chinese inte
 | `app.js` | All the logic |
 | `config.js` | Your Supabase URL and public key go here |
 | `supabase/schema.sql` | Database tables and access rules; run it once in Supabase |
+| `manifest.webmanifest`, `icons/` | Name and icons used when adding the site to a phone's home screen |
 
 ## Ratings
 
@@ -95,6 +96,8 @@ Open <http://localhost:5173>:
 4. You'll get a URL like `https://xxx.vercel.app`
 
 From then on, every `git push` updates the site automatically.
+
+> **After changing `style.css` or `app.js`**: bump the number after `?v=` in `index.html` (e.g. `style.css?v=3` → `?v=4`), otherwise phone browsers may keep using the old cached copy.
 
 > Don't want to use Git? Drag the whole folder onto <https://app.netlify.com/drop> to get a URL right away.
 
