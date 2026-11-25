@@ -7,6 +7,8 @@
 # local
 .vercel
 
-# 网页导出的数据备份（里面有真实的餐厅记录和评价，别传上去）
-*备份*.json
+# Data backups exported from the site (contain real restaurant records and reviews — never commit)
+*backup*.json
 foodrank-*.json
+# older exports used a Chinese filename (从夯到拉-备份-日期.json)
+*备份*.json

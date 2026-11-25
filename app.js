@@ -718,7 +718,7 @@ $('#exportBtn').addEventListener('click', () => {
   };
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
-  a.download = `从夯到拉-备份-${today()}.json`;
+  a.download = `foodrank-backup-${today()}.json`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 });
