@@ -27,11 +27,12 @@ The site's interface is in Chinese. "从夯到拉" (from "夯" to "拉") is Chin
 
 - **Regions**: the title "锐评 ▾" opens a menu to switch between Ottawa and Toronto. Each region has its own list; a restaurant added in Ottawa never shows up in Toronto.
 - **The list**: 10 rows (levels), plus a "待评" (to be rated) row at the bottom. New restaurants go into 待评 in the order they were added.
-- **Reading**: tap a restaurant to see its tier, full name, photos (swipe left / right; they loop, so the first photo follows the last), details, and who added and ranked it.
+- **Reading**: tap a restaurant to see its tier, full name, photos (always shown whole, never cropped; swipe left / right and they loop, so the first photo follows the last; tap a photo to see it full screen, tap again to close), details, and who added and ranked it.
 - **Search**: type in the search box. Only restaurants whose name or details match stay visible, highlighted and in their usual order; the rest are hidden. Tap × to clear.
 - **Ranking**: tap "编辑" (Edit). The page switches to a fresh, empty list plus the 待评 row. Long-press a restaurant, drag it onto a row (the row lights up and shows where it will snap; in the 夯拉 style it's the height of your finger that picks one of the two rows next to a label), let go, and tap "完成" (Done) to save. Restaurants ranked in the same batch sit left to right by when they were added, in front of the ones ranked earlier.
 - **Adding**: the square "+" next to the search box, or "添加" in the bottom bar. Enter a name, up to 3 photos (uploaded at original size; the first is the cover), and any number of details (120 characters each).
 - **Mistakes**: in a restaurant's detail sheet, "编辑" changes its name / photos / details, "放回待评" moves it back to the 待评 row so you can rank it again, and "删除" deletes it.
+- **On a computer** (window 960px wide or more): the same site switches to a desktop layout. The list is wider and its rows wrap onto new lines instead of scrolling sideways. There's no bottom bar: the add button is the round "+" at the bottom right, and your account is the button at the top right. Clicking a restaurant opens its details in the middle of the page, with ‹ › buttons (or the arrow keys) for photos; click a photo to see it full screen; Esc closes it. Adding, deleting and ranking (drag with the mouse) work exactly as on the phone.
 
 ### Rating styles
 
@@ -101,7 +102,7 @@ Open <http://localhost:5173>. It uses the same Supabase database as the live sit
 
 From then on, every `git push` updates the site automatically.
 
-> **After changing `style.css` or `app.js`**: bump the number after `?v=` in `index.html` (e.g. `style.css?v=4` → `?v=5`), otherwise phone browsers may keep using the old cached copy.
+> **After changing `style.css` or `app.js`**: bump the number after `?v=` in `index.html` (e.g. `style.css?v=5` → `?v=6`), otherwise phone browsers may keep using the old cached copy.
 
 > **When a change also needs new SQL**: run the SQL in Supabase first, then push the code. The new page doesn't work against the old database.
 

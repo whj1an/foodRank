@@ -16,7 +16,7 @@
   <link rel="icon" type="image/png" href="icons/favicon-32.png">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <!-- 改了 style.css / app.js 以后，把 ?v= 后面的数字加 1，浏览器就不会用旧缓存 -->
-  <link rel="stylesheet" href="style.css?v=4">
+  <link rel="stylesheet" href="style.css?v=5">
 </head>
 <body>
   <!-- 还没配置数据库 -->
@@ -89,11 +89,19 @@
         <span>账户</span>
       </button>
     </nav>
+
+    <!-- 桌面版：右下角的添加按钮（手机上用底部横栏和搜索框旁边的 +） -->
+    <button type="button" class="fab" data-act="add" aria-label="添加餐厅" title="添加餐厅">+</button>
   </div>
 
   <!-- 餐厅细节（阅览模式点标签弹出） -->
   <dialog id="detailDialog" class="sheet" aria-labelledby="detailName">
     <div id="detailBody"></div>
+  </dialog>
+
+  <!-- 全屏看大图（点细节里的图片打开） -->
+  <dialog id="photoViewer" class="viewer" aria-label="查看大图">
+    <div class="viewer-body" id="viewerBody"></div>
   </dialog>
 
   <!-- 添加 / 编辑餐厅：从下往上弹出 -->
@@ -167,7 +175,7 @@
   <div id="toast" class="toast" role="status" hidden></div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js"></script>
-  <script src="config.js?v=4"></script>
-  <script src="app.js?v=4"></script>
+  <script src="config.js?v=5"></script>
+  <script src="app.js?v=5"></script>
 </body>
 </html>

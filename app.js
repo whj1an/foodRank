@@ -51,6 +51,8 @@ let detailId = null;
 let authMode = 'login';
 let form = null; // 添加 / 编辑弹窗：{ id, photos: [...], removed: [...] }
 let drag = null;
+let detailCarousel = null; // 细节弹窗里的图片轮播（看完大图回来，停在同一张）
+let viewerCarousel = null; // 全屏看大图的轮播
 
 /* ---------- 工具 ---------- */
 const $ = (s, root = document) => root.querySelector(s);
@@ -232,7 +234,7 @@ function renderChrome() {
 function chip(r, hit = false) {
   const cover = coverOf(r);
   return `<button type="button" class="chip${cover ? '' : ' nophoto'}${hit ? ' hit' : ''}" data-id="${esc(r.id)}"`
-    + `${cover ? ` style="background-image:${esc(cssUrl(cover))}"` : ''} aria-label="${esc(r.name)}">`
+    + `${cover ? ` style="background-image:${esc(cssUrl(cover))}"` : ''} aria-label="${esc(r.name)}" title="${esc(r.name)}">`
     + `<span class="nm">${esc(r.name)}</span></button>`;
 }
 
@@ -332,15 +334,8 @@ function renderDetail() {
     ? `<span class="lvbox lv-${r.level}${ratingStyle === 'letter' && LETTERS[r.level].length > 1 ? ' wide' : ''}" title="${esc(levelLabel(r.level, 'tier'))}">${esc(boxLabel(r.level))}</span>`
     : '<span class="lvbox lv-none" title="还没排">待</span>';
   const n = photos.length;
-  const slide = (p, i, copy) => `<div class="slide"${copy ? ' aria-hidden="true"' : ''}>`
-    + `<img src="${esc(photoUrl(p.src))}" alt="${copy ? '' : esc(`${r.name} 第 ${i + 1} 张图`)}" draggable="false"></div>`;
-  // 多张图时首尾相连：最前面放一张「最后一张」的副本，最后面放一张「第一张」的副本（见 setupCarousel）
-  const track = n > 1
-    ? slide(photos[n - 1], n - 1, true) + photos.map((p, i) => slide(p, i, false)).join('') + slide(photos[0], 0, true)
-    : photos.map((p, i) => slide(p, i, false)).join('');
   const pics = n
-    ? `<div class="carousel" id="carousel"><div class="slides"${n > 1 ? ' style="transform:translateX(-100%)"' : ''}>${track}</div></div>`
-      + (n > 1 ? `<p class="counter" id="carouselCounter">1 / ${n}</p>` : '')
+    ? carouselHtml(r, 'carousel', { hint: true }) + (n > 1 ? `<p class="counter" id="carouselCounter">1 / ${n}</p>` : '')
     : '<div class="no-photo">没有图片</div>';
   const details = (r.details || []).length
     ? `<div class="d-details">${r.details.map((d) => `<p>${esc(d)}</p>`).join('')}</div>`
@@ -368,8 +363,48 @@ function renderDetail() {
     ${details}
     <p class="d-meta">${meta}</p>
     ${actions}`;
-  if (photos.length > 1) setupCarousel($('#carousel'), photos.length);
+  // 点一下图片（不是滑动）就全屏看大图
+  detailCarousel = n
+    ? setupCarousel($('#carousel'), n, { counter: $('#carouselCounter'), onTap: (i) => openViewer(r, i) })
+    : null;
   requestAnimationFrame(checkNameOverflow);
+}
+
+const ZOOM_ICON = '<svg viewBox="0 0 16 16"><path d="M9.5 2.5h4v4M6.5 13.5h-4v-4M13.5 2.5 9 7M2.5 13.5 7 9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+// 图片轮播的 HTML（细节弹窗和全屏大图共用）。每张图都完整显示（不裁切，多出来的地方是黑边）。
+// 多张图时首尾相连：最前面放一张「最后一张」的副本，最后面放一张「第一张」的副本（见 setupCarousel）；
+// 有鼠标的电脑上图片两边有 ‹ › 按钮，手机上用手指滑。hint = 右下角「点开看大图」的小图标。
+function carouselHtml(r, id, { cls = '', hint = false } = {}) {
+  const photos = r.photos || [];
+  const n = photos.length;
+  const slide = (p, i, copy) => `<div class="slide"${copy ? ' aria-hidden="true"' : ''}>`
+    + `<img src="${esc(photoUrl(p.src))}" alt="${copy ? '' : esc(`${r.name} 第 ${i + 1} 张图`)}" draggable="false"></div>`;
+  const track = n > 1
+    ? slide(photos[n - 1], n - 1, true) + photos.map((p, i) => slide(p, i, false)).join('') + slide(photos[0], 0, true)
+    : photos.map((p, i) => slide(p, i, false)).join('');
+  const nav = n > 1
+    ? '<button type="button" class="nav prev" aria-label="上一张">‹</button><button type="button" class="nav next" aria-label="下一张">›</button>'
+    : '';
+  const zoom = hint ? `<span class="zoom-hint" aria-hidden="true">${ZOOM_ICON}</span>` : '';
+  return `<div class="carousel${cls ? ` ${cls}` : ''}" id="${id}" tabindex="0" role="group" aria-label="${hint ? '图片，点一下看大图' : '大图'}">`
+    + `<div class="slides"${n > 1 ? ' style="transform:translateX(-100%)"' : ''}>${track}</div>${nav}${zoom}</div>`;
+}
+
+// 全屏看大图：黑底，整张图尽量放大并完整显示；左右滑 / ‹ › / 键盘左右键翻页，点一下图片或 × 关闭
+function openViewer(r, index) {
+  const n = (r.photos || []).length;
+  if (!n) return;
+  $('#viewerBody').innerHTML = carouselHtml(r, 'viewerCarousel', { cls: 'viewer-carousel' })
+    + '<button type="button" class="icon-btn viewer-close" data-close aria-label="关闭大图">×</button>'
+    + (n > 1 ? '<p class="viewer-counter" id="viewerCounter"></p>' : '');
+  const dlg = $('#photoViewer');
+  openSheet(dlg);
+  viewerCarousel = setupCarousel($('#viewerCarousel'), n, {
+    counter: $('#viewerCounter'),
+    first: index,
+    onTap: () => closeSheet(dlg),
+  });
 }
 
 // 名字太长：折叠成一行，后面加一个小三角，点三角展开
@@ -383,13 +418,22 @@ function checkNameOverflow() {
 // 多张图左右滑，首尾相连：在最后一张往左滑，第一张从右边接着滑进来；在第一张往右滑，最后一张从左边滑进来。
 // 做法：轨道是 [最后一张的副本, 第 1 张, …, 第 n 张, 第一张的副本]，
 // 滑到副本上、动画一结束，就不带动画地跳回真的那一张（两张长得一样，看不出来）。
-function setupCarousel(root, n) {
+// 选项：counter = 显示「2 / 3」的元素；first = 一开始显示第几张（0 开始）；onTap(第几张) = 点了一下（不是滑动）。
+// 返回 { show(第几张), index() }，用来在细节弹窗和大图之间同步停在哪一张。
+function setupCarousel(root, n, { counter = null, first = 0, onTap = null } = {}) {
+  let dragged = false; // 刚才是不是滑动（滑动松手后浏览器可能还会发一次 click，不能当成点击）
+  const tapAt = () => onTap?.(n > 1 ? real() - 1 : 0);
+  root.addEventListener('keydown', (e) => { if (e.key === 'Enter') tapAt(); });
+  if (n < 2) { // 只有一张：不用滑，点一下看大图
+    root.addEventListener('click', tapAt);
+    return { show() {}, index: () => 0 };
+  }
   const slides = $('.slides', root);
-  const counter = $('#carouselCounter');
   let p = 1; // 轨道上的位置：0 = 最后一张的副本，1..n = 真的，n + 1 = 第一张的副本
   let start = null;
   let settleTimer = 0;
   const real = () => (p === 0 ? n : p === n + 1 ? 1 : p);
+  const showCounter = () => { if (counter) counter.textContent = `${real()} / ${n}`; };
   const place = (dx = 0) => { slides.style.transform = `translateX(calc(${-p * 100}% + ${dx}px))`; };
   // 不带动画直接放到位置 k（正在播的动画也会立刻结束）
   const jump = (k) => {
@@ -406,7 +450,7 @@ function setupCarousel(root, n) {
   const moveTo = (k) => { // 带动画滑到位置 k
     p = k;
     place();
-    if (counter) counter.textContent = `${real()} / ${n}`;
+    showCounter();
     // 正常是动画结束（transitionend）时换回真的那张；万一浏览器没发这个事件，过一会儿也会换
     clearTimeout(settleTimer);
     if (p === 0 || p === n + 1) settleTimer = setTimeout(settle, 450);
@@ -414,6 +458,7 @@ function setupCarousel(root, n) {
   slides.addEventListener('transitionend', (e) => { if (e.target === slides) settle(); });
   root.addEventListener('pointerdown', (e) => {
     settle();
+    dragged = false;
     start = { x: e.clientX, y: e.clientY, dx: 0, on: false, id: e.pointerId };
   });
   root.addEventListener('pointermove', (e) => {
@@ -434,6 +479,7 @@ function setupCarousel(root, n) {
     if (!start) return;
     const { on, dx } = start;
     start = null;
+    dragged = on;
     slides.classList.remove('dragging');
     if (on && dx < -40) moveTo(p + 1); // 往左滑：下一张（最后一张之后接第一张）
     else if (on && dx > 40) moveTo(p - 1); // 往右滑：上一张（第一张之前接最后一张）
@@ -441,12 +487,27 @@ function setupCarousel(root, n) {
   };
   root.addEventListener('pointerup', end);
   root.addEventListener('pointercancel', end);
-  root.tabIndex = 0;
   root.addEventListener('keydown', (e) => {
     if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
     settle();
     moveTo(p + (e.key === 'ArrowRight' ? 1 : -1));
   });
+  root.addEventListener('click', (e) => {
+    const btn = e.target.closest('.nav');
+    if (btn) { // ‹ › 按钮：和滑动一样首尾相连
+      settle();
+      moveTo(p + (btn.classList.contains('next') ? 1 : -1));
+      return;
+    }
+    if (dragged) { dragged = false; return; } // 刚滑完，不算点击
+    tapAt();
+  });
+  jump(first + 1);
+  showCounter();
+  return {
+    show: (i) => { jump(i + 1); showCounter(); }, // 不带动画直接显示第 i 张
+    index: () => real() - 1,
+  };
 }
 
 /* ---------- 添加 / 编辑餐厅 ---------- */
@@ -1077,6 +1138,12 @@ function bindEvents() {
     }
   });
   $('#detailDialog').addEventListener('close', () => { detailId = null; });
+  // 看完大图回到细节弹窗：停在刚才看的那一张
+  $('#photoViewer').addEventListener('close', () => {
+    if (viewerCarousel && detailCarousel) detailCarousel.show(viewerCarousel.index());
+    viewerCarousel = null;
+    $('#viewerBody').innerHTML = '';
+  });
 
   // 添加 / 编辑
   $('#editForm').addEventListener('submit', submitEditor);

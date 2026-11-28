@@ -315,11 +315,45 @@ dialog.sheet > form { padding-bottom: 0; }
 .name-toggle svg { width: 14px; height: 14px; transition: transform .15s; }
 .d-name.open .name-toggle svg { transform: rotate(90deg); }
 
-.carousel { position: relative; overflow: hidden; border-radius: 10px; background: #0b0b0b; aspect-ratio: 4 / 3; touch-action: pan-y; }
-.slides { display: flex; height: 100%; transition: transform .28s ease; }
+/* 图片框：手机上是正方形（横图、竖图都能放得比较大），最高不超过屏幕的 60% */
+.carousel {
+  position: relative; overflow: hidden; border-radius: 10px; background: #0b0b0b;
+  width: 100%; aspect-ratio: 1 / 1; max-height: 60vh; touch-action: pan-y;
+}
+.slides { position: absolute; inset: 0; display: flex; transition: transform .28s ease; }
 .slides.dragging { transition: none; }
-.slide { flex: 0 0 100%; height: 100%; display: grid; place-items: center; }
-.slide img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; -webkit-user-drag: none; user-select: none; }
+.slide { position: relative; flex: 0 0 100%; height: 100%; }
+/* 整张图完整显示在框里（contain），不裁切；框比图宽或高的地方是黑边 */
+.slide img {
+  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
+  display: block; -webkit-user-drag: none; user-select: none;
+}
+/* 右下角的小图标：提示点一下可以看大图 */
+.zoom-hint {
+  position: absolute; right: 8px; bottom: 8px; z-index: 2; width: 28px; height: 28px; border-radius: 50%;
+  display: grid; place-items: center; background: rgba(0, 0, 0, .55); color: #fff; pointer-events: none;
+}
+.zoom-hint svg { width: 14px; height: 14px; }
+
+/* 全屏看大图：黑底铺满屏幕，整张图尽量放大并完整显示；左右滑翻页（双指可以再放大），点一下图片或 × 关闭 */
+dialog.viewer {
+  width: 100vw; height: 100vh; height: 100dvh; max-width: none; max-height: none;
+  margin: 0; padding: 0; border: 0; background: #000; color: #fff; overflow: hidden;
+}
+dialog.viewer::backdrop { background: #000; }
+.viewer-body { position: relative; width: 100%; height: 100%; }
+.carousel.viewer-carousel {
+  position: absolute; inset: 0; aspect-ratio: auto; max-height: none; border-radius: 0;
+  background: #000; touch-action: pan-y pinch-zoom; outline: none;
+}
+.viewer-close {
+  position: absolute; top: calc(var(--safe-t) + 12px); right: 12px; z-index: 3;
+  width: 40px; height: 40px; font-size: 22px; background: rgba(255, 255, 255, .16); color: #fff;
+}
+.viewer-counter {
+  position: absolute; left: 0; right: 0; bottom: calc(var(--safe-b) + 16px); z-index: 3;
+  text-align: center; font-size: 13px; color: rgba(255, 255, 255, .8); pointer-events: none;
+}
 .counter { text-align: center; font-size: 12px; color: var(--muted); margin-top: 6px; }
 .no-photo { display: grid; place-items: center; height: 80px; border-radius: 10px; background: var(--board); color: var(--muted); font-size: 13px; }
 .d-details { margin-top: 14px; display: grid; gap: 8px; }
@@ -344,6 +378,34 @@ dialog.sheet > form { padding-bottom: 0; }
 .setup { max-width: 420px; margin: 20vh auto 0; padding: 0 20px; text-align: center; }
 .setup .logo { font-size: 34px; margin-bottom: 10px; }
 
+/* 桌面版右下角的添加按钮：平时藏着，只在桌面版显示（见最下面） */
+.fab {
+  display: none; position: fixed; right: 32px; bottom: 32px; z-index: 25;
+  width: 60px; height: 60px; padding: 0; border-radius: 50%;
+  place-items: center; background: var(--primary); color: var(--primary-text);
+  font-size: 34px; font-weight: 300; line-height: 1;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .55);
+}
+body.editing .fab { display: none !important; }
+
+/* 细节弹窗里多张图的 ‹ › 按钮：只在有鼠标的设备上、鼠标移到图片上时出现（手机上用手指滑） */
+.carousel .nav {
+  display: none; position: absolute; top: 50%; z-index: 2; transform: translateY(-50%);
+  width: 40px; height: 40px; padding: 0; border-radius: 50%;
+  place-items: center; background: rgba(0, 0, 0, .55); color: #fff; font-size: 26px; line-height: 1;
+}
+.carousel .prev { left: 10px; }
+.carousel .next { right: 10px; }
+@media (hover: hover) and (pointer: fine) {
+  .carousel .nav { display: grid; opacity: 0; transition: opacity .15s; }
+  .carousel:hover .nav, .carousel:focus-within .nav { opacity: 1; }
+  #carousel { cursor: zoom-in; }
+  .viewer-carousel { cursor: zoom-out; }
+  .chip { cursor: pointer; }
+  .chip:hover { outline: 2px solid rgba(255, 255, 255, .75); outline-offset: -2px; }
+  .fab:hover { filter: brightness(.9); }
+}
+
 .toast {
   position: fixed; left: 50%; bottom: calc(var(--tabbar) + var(--safe-b) + 14px); z-index: 2000;
   transform: translateX(-50%); max-width: calc(100vw - 32px); width: max-content;
@@ -353,7 +415,7 @@ dialog.sheet > form { padding-bottom: 0; }
 .toast.err { background: var(--danger); color: #1a0505; }
 body.editing .toast { bottom: calc(var(--tile) + 70px + var(--safe-b)); }
 
-/* ---------- 电脑上：同一套布局，居中；弹窗在屏幕中间 ---------- */
+/* ---------- 平板（720–959px）：还是手机的布局，放在中间一栏；弹窗在屏幕中间 ---------- */
 @media (min-width: 720px) {
   :root { --tile: 72px; --label: 80px; }
   .bar { max-width: 560px; margin: 0 auto; }
@@ -361,4 +423,39 @@ body.editing .toast { bottom: calc(var(--tile) + 70px + var(--safe-b)); }
   dialog.sheet { margin: auto; width: 480px; max-height: 86vh; border-radius: 16px; }
   .sheet-foot { border-radius: 0 0 16px 16px; }
   body.editing .pool { margin: 12px 0 0; border-radius: 12px; }
+}
+
+/* ---------- 桌面版（960px 以上）：宽排行榜，标签放不下就换行；
+   没有底部横栏，添加按钮在右下角，账户在右上角；点标签，细节在页面正中间弹出 ---------- */
+@media (min-width: 960px) {
+  :root { --tile: 88px; --label: 112px; --page: 1160px; }
+  body { padding-bottom: 120px; }
+  .bar { max-width: var(--page); padding: 18px 32px 10px; }
+  .title-btn .logo { font-size: 28px; }
+  #authBtn { max-width: 240px; }
+  .searchrow { max-width: 640px; padding: 4px 32px 18px; }
+  .square-add, .tabbar { display: none; }
+  .fab { display: grid; }
+  .wrap { max-width: var(--page); padding: 0 32px; }
+  .list-head { margin-bottom: 10px; }
+
+  .tier { min-height: calc(var(--tile) + 16px); }
+  .tier.empty { min-height: 52px; }
+  .tier-label { font-size: 20px; }
+  .board.tier-style .tier-label { font-size: 22px; }
+  .track { flex-wrap: wrap; overflow: visible; gap: 8px; padding: 8px; }
+  .pool .track { min-height: calc(var(--tile) + 16px); }
+  .chip .nm { font-size: 12px; }
+  .chip.nophoto .nm { font-size: 13px; }
+
+  dialog.sheet { width: 520px; max-height: 86vh; }
+  #detailDialog { width: 680px; }
+  #detailDialog > div { padding: 20px 24px 24px; }
+  #detailDialog .carousel { aspect-ratio: 4 / 3; max-height: 56vh; }
+  .d-name h2 { font-size: 22px; }
+  .toast { bottom: 32px; }
+
+  body.editing .list-head { margin: 0 0 10px; padding: 12px 0; }
+  body.editing .pool { margin: 16px 0 0; }
+  body.editing .toast { bottom: calc(var(--tile) + 90px); }
 }
