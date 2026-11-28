@@ -1,7 +1,7 @@
 {
-  "name": "从夯到拉",
-  "short_name": "从夯到拉",
-  "description": "我们俩吃过的渥太华餐厅排行榜",
+  "name": "锐评",
+  "short_name": "锐评",
+  "description": "Ottawa / Toronto 餐厅排行榜，从夯到拉",
   "lang": "zh-CN",
   "start_url": "/",
   "scope": "/",

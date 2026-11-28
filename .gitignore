@@ -7,6 +7,9 @@
 # local
 .vercel
 
+# Private notes with real account passwords — never commit
+docs/sc.md
+
 # Data backups exported from the site (contain real restaurant records and reviews — never commit)
 *backup*.json
 foodrank-*.json

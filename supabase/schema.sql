@@ -1,67 +1,74 @@
+-- 锐评 · 数据库（第 2 版）
+-- 新项目：在 Supabase SQL Editor 里把整份文件运行一次。
+-- 从第 1 版（从夯到拉）升级：先运行 upgrade-from-v1.sql，再运行这份。
+-- 不要在已经有数据的库上重复运行这份文件。
+
 -- ---------- 表 ----------
 
--- 每个注册用户一条资料
---   account  = 注册账号（只能是小写英文字母和数字，用来登录）
---   username = 用户名（可选，大家看到的名字；没填就显示账号）
---   role     = owner：你们俩，可以管理餐厅；friend：朋友，只能写自己的见解
-create table public.profiles (
-  id         uuid primary key references auth.users (id) on delete cascade,
-  account    text not null unique check (account ~ '^[a-z0-9]{3,20}$'),
-  username   text check (username = btrim(username) and char_length(username) between 1 and 20),
-  role       text not null default 'friend' check (role in ('owner', 'friend')),
+-- 库：一份排行榜（两个地区的餐厅都在里面）。每个用户注册时自动有一个自己的库；
+-- 绑定的两个人共用同一个库，所以一个人添加的餐厅另一个人也能看到、也能排。
+create table public.boards (
+  id         uuid primary key default gen_random_uuid(),
   created_at timestamptz not null default now()
 );
--- 大家看到的名字（用户名，没有就用账号）不能重复，不分大小写
-create unique index profiles_shown_name_key on public.profiles (lower(coalesce(username, account)));
 
--- 餐厅（只有 owner 能添加 / 修改）
+-- 用户：用户名就是登录用的名字（小写英文字母和数字，3–20 位）
+create table public.profiles (
+  id         uuid primary key references auth.users (id) on delete cascade,
+  username   text not null unique check (username ~ '^[a-z0-9]{3,20}$'),
+  board_id   uuid not null references public.boards (id),
+  created_at timestamptz not null default now()
+);
+create index profiles_board_id_idx on public.profiles (board_id);
+
+-- 每条细节最多 120 个字
+create function public.details_ok(arr text[])
+returns boolean
+language sql
+immutable
+set search_path = ''
+as $$
+  select coalesce(bool_and(char_length(d) between 1 and 120), true) from unnest(arr) as d;
+$$;
+
+-- 餐厅（页面上的一个标签）
+--   region = 地区，ottawa / toronto，两个地区互不相通
+--   level  = 等级 1–10（10 = A，1 = F；夯拉样式每档管两个等级，比如 10、9 都在「夯」）；null = 还在待评区
+--   photos = 最多 3 张图：[{ "src": 原图路径, "thumb": 缩略图路径 }]，第一张是封面
 create table public.restaurants (
-  id          uuid primary key default gen_random_uuid(),
-  name        text not null check (char_length(name) between 1 and 80),
-  area        text check (char_length(area) <= 40),
-  cuisine     text check (char_length(cuisine) <= 40),
-  price       smallint not null default 2 check (price between 1 and 4),
-  address     text check (char_length(address) <= 120),
-  last_visit  date,
-  visits      integer not null default 1 check (visits between 1 and 999),
-  again       text not null default 'maybe' check (again in ('yes', 'maybe', 'no')),
-  dishes      text[] not null default '{}',
-  notes       text check (char_length(notes) <= 1000),
-  created_by  uuid default auth.uid() references public.profiles (id) on delete set null,
-  created_at  timestamptz not null default now(),
-  updated_at  timestamptz not null default now()
+  id         uuid primary key default gen_random_uuid(),
+  board_id   uuid not null references public.boards (id) on delete cascade,
+  region     text not null check (region in ('ottawa', 'toronto')),
+  name       text not null check (char_length(btrim(name)) between 1 and 80),
+  details    text[] not null default '{}' check (cardinality(details) <= 20 and public.details_ok(details)),
+  photos     jsonb not null default '[]' check (jsonb_typeof(photos) = 'array' and jsonb_array_length(photos) <= 3),
+  level      smallint check (level between 1 and 10),
+  created_by uuid references public.profiles (id) on delete set null,
+  created_at timestamptz not null default now(),
+  ranked_by  uuid references public.profiles (id) on delete set null,
+  ranked_at  timestamptz,
+  updated_at timestamptz not null default now()
 );
-
--- 评价：每人对每家餐厅一条
---   score = 评级 1–10（10 = 夯 = A，1 = 拉夯了 = F），网页上可以切换显示样式
-create table public.reviews (
-  id            uuid primary key default gen_random_uuid(),
-  restaurant_id uuid not null references public.restaurants (id) on delete cascade,
-  user_id       uuid not null default auth.uid() references public.profiles (id) on delete cascade,
-  score         smallint not null check (score between 1 and 10),
-  comment       text check (char_length(comment) <= 1000),
-  created_at    timestamptz not null default now(),
-  updated_at    timestamptz not null default now(),
-  unique (restaurant_id, user_id)
-);
-create index reviews_restaurant_id_idx on public.reviews (restaurant_id);
-create index reviews_user_id_idx on public.reviews (user_id);
+create index restaurants_board_id_idx on public.restaurants (board_id);
 
 -- ---------- 自动处理 ----------
 
--- 新用户注册时，自动建一条 profile（账号和用户名来自注册表单）
--- 账号或名字重复、格式不对时这里会报错，整个注册会被取消
+-- 新用户注册时：建一个自己的库 + 一条 profile
+-- 用户名重复或格式不对时这里会报错，整个注册会被取消
 create function public.handle_new_user()
 returns trigger
 language plpgsql
 security definer set search_path = ''
 as $$
+declare
+  b uuid;
 begin
-  insert into public.profiles (id, account, username)
+  insert into public.boards default values returning id into b;
+  insert into public.profiles (id, username, board_id)
   values (
     new.id,
-    lower(coalesce(nullif(new.raw_user_meta_data ->> 'account', ''), split_part(new.email, '@', 1))),
-    nullif(btrim(coalesce(new.raw_user_meta_data ->> 'username', '')), '')
+    lower(split_part(new.email, '@', 1)),   -- 登录用的内部邮箱是「用户名@域名」
+    b
   );
   return new;
 end;
@@ -71,89 +78,207 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
 
--- 修改时自动更新 updated_at
-create function public.touch_updated_at()
+-- 当前登录的人在用哪个库
+create function public.my_board()
+returns uuid
+language sql
+stable
+security definer set search_path = ''
+as $$
+  select board_id from public.profiles where id = auth.uid();
+$$;
+
+-- 网页（authenticated）写餐厅时，谁添加、谁排序、什么时候排的都由数据库来记，网页改不了：
+--   新加的餐厅一律先进待评区；改等级时自动记下排序的人和时间（用数据库的时间，
+--   所以两个人同时排同一家，以后点「完成」的那个为准）。
+-- 数据库管理员（在 SQL Editor 里运行的函数，比如绑定 / 解绑）不受这些限制。
+create function public.restaurants_guard()
 returns trigger
 language plpgsql
 set search_path = ''
 as $$
 begin
-  new.updated_at = now();
+  if tg_op = 'INSERT' then
+    if current_user = 'authenticated' then
+      new.created_by := auth.uid();
+      new.created_at := now();
+      new.level := null;
+      new.ranked_by := null;
+      new.ranked_at := null;
+    end if;
+  else
+    if current_user = 'authenticated' then
+      new.board_id := old.board_id;
+      new.region := old.region;
+      new.created_by := old.created_by;
+      new.created_at := old.created_at;
+      if new.level is distinct from old.level then
+        new.ranked_by := case when new.level is null then null else auth.uid() end;
+        new.ranked_at := case when new.level is null then null else now() end;
+      else
+        new.ranked_by := old.ranked_by;
+        new.ranked_at := old.ranked_at;
+      end if;
+    end if;
+    new.updated_at := now();
+  end if;
   return new;
 end;
 $$;
 
-create trigger restaurants_touch before update on public.restaurants
-  for each row execute function public.touch_updated_at();
-create trigger reviews_touch before update on public.reviews
-  for each row execute function public.touch_updated_at();
+create trigger restaurants_guard before insert or update on public.restaurants
+  for each row execute function public.restaurants_guard();
 
--- 判断某人是不是 owner
-create function public.is_owner(uid uuid default auth.uid())
-returns boolean
-language sql
-stable
-security definer set search_path = ''
+-- 点「完成」时一次保存所有刚排好的餐厅：items = [{ "id": "...", "level": 1–10 或 null }]
+-- 在一个事务里完成，所以同一批的排序时间完全相同（页面上同一批按添加时间从左往右排）
+create function public.save_ranking(items jsonb)
+returns integer
+language plpgsql
+set search_path = ''
 as $$
-  select exists (select 1 from public.profiles where id = uid and role = 'owner');
+declare
+  n integer;
+begin
+  update public.restaurants r
+     set level = (i ->> 'level')::smallint
+    from jsonb_array_elements(items) as i
+   where r.id = (i ->> 'id')::uuid
+     and r.board_id = public.my_board();
+  get diagnostics n = row_count;
+  return n;
+end;
 $$;
 
--- ---------- 权限（Row Level Security）----------
--- 所有人（包括没登录的访客）都能看；只有登录的人能增删改，并且按角色限制。
+-- 取消绑定：自己搬到一个新库，并且带走一份解绑前的完整排行（对方的库原样保留）
+create function public.unbind()
+returns void
+language plpgsql
+security definer set search_path = ''
+as $$
+declare
+  me uuid := auth.uid();
+  old_board uuid;
+  new_board uuid;
+begin
+  if me is null then
+    raise exception '请先登录';
+  end if;
+  select board_id into old_board from public.profiles where id = me for update;
+  if (select count(*) from public.profiles where board_id = old_board) < 2 then
+    raise exception '你现在没有和任何人绑定';
+  end if;
+  insert into public.boards default values returning id into new_board;
+  insert into public.restaurants
+    (board_id, region, name, details, photos, level, created_by, created_at, ranked_by, ranked_at, updated_at)
+  select new_board, region, name, details, photos, level, created_by, created_at, ranked_by, ranked_at, updated_at
+    from public.restaurants
+   where board_id = old_board;
+  update public.profiles set board_id = new_board where id = me;
+end;
+$$;
 
+-- 绑定两个人（只能在 SQL Editor 里运行，网页调用不了）：
+--   select public.bind_users('whj', 'xxr');
+-- 第二个人搬进第一个人的库，第二个人原来库里的餐厅也一起搬过去，以后两人共用一份排行。
+create function public.bind_users(first_user text, second_user text)
+returns void
+language plpgsql
+security definer set search_path = ''
+as $$
+declare
+  a_board uuid;
+  b_board uuid;
+begin
+  select board_id into a_board from public.profiles where username = lower(first_user);
+  select board_id into b_board from public.profiles where username = lower(second_user);
+  if a_board is null then raise exception '找不到用户 %', first_user; end if;
+  if b_board is null then raise exception '找不到用户 %', second_user; end if;
+  if a_board = b_board then raise exception '% 和 % 已经绑定了', first_user, second_user; end if;
+  update public.restaurants set board_id = a_board where board_id = b_board;
+  update public.profiles set board_id = a_board where board_id = b_board;
+  delete from public.boards where id = b_board;
+end;
+$$;
+
+-- 已经注册过的账号（比如第 1 版里注册的）补一个库和 profile；用户名不合规的会跳过
+do $$
+declare
+  u record;
+  b uuid;
+begin
+  for u in select id, email from auth.users
+           where id not in (select id from public.profiles) order by created_at loop
+    begin
+      insert into public.boards default values returning id into b;
+      insert into public.profiles (id, username, board_id)
+      values (u.id,
+              lower(split_part(u.email, '@', 1)),
+              b);
+    exception when others then
+      raise notice '跳过 %：%', u.email, sqlerrm;
+    end;
+  end loop;
+end;
+$$;
+
+-- ---------- 权限 ----------
+-- 所有人（包括没登录的访客）都能看；登录的人只能改自己库里的餐厅。
+
+alter table public.boards      enable row level security;
 alter table public.profiles    enable row level security;
 alter table public.restaurants enable row level security;
-alter table public.reviews     enable row level security;
 
--- 表权限（grant）：决定网页能不能碰这张表；上面的 RLS 再决定能碰哪几行。
+-- 表权限（grant）：决定网页能不能碰这张表；RLS 再决定能碰哪几行。
 -- 有些 Supabase 项目不会自动给新表开权限，所以这里明确写出来，先全部收回再按需给。
-revoke all on public.profiles, public.restaurants, public.reviews from anon, authenticated;
+revoke all on public.boards, public.profiles, public.restaurants from anon, authenticated;
 grant usage on schema public to anon, authenticated;
-grant select on public.profiles, public.restaurants, public.reviews to anon, authenticated;
-grant insert, update, delete on public.restaurants, public.reviews to authenticated;
-grant update (username) on public.profiles to authenticated;   -- 只能改用户名这一列
-grant execute on function public.is_owner(uuid) to anon, authenticated;
+grant select on public.boards, public.profiles, public.restaurants to anon, authenticated;
+grant insert, update, delete on public.restaurants to authenticated;
 
--- profiles：大家都能看名字；只能改自己的用户名（账号和角色不能改）
+-- 函数权限：Supabase 默认允许网页调用 public 里的所有函数，所以先全部收回
+revoke execute on function public.details_ok(text[]), public.handle_new_user(), public.my_board(),
+  public.restaurants_guard(), public.save_ranking(jsonb), public.unbind(), public.bind_users(text, text)
+  from public, anon, authenticated;
+grant execute on function public.details_ok(text[]) to anon, authenticated;
+grant execute on function public.my_board() to anon, authenticated;
+grant execute on function public.save_ranking(jsonb), public.unbind() to authenticated;
+-- bind_users 只给数据库管理员用，不给网页
+
+create policy "boards: 所有人可读" on public.boards
+  for select to anon, authenticated using (true);
+
 create policy "profiles: 所有人可读" on public.profiles
   for select to anon, authenticated using (true);
-create policy "profiles: 改自己" on public.profiles
-  for update to authenticated
-  using (id = (select auth.uid()))
-  with check (id = (select auth.uid()));
 
--- restaurants：owner 可增删改
 create policy "restaurants: 所有人可读" on public.restaurants
   for select to anon, authenticated using (true);
-create policy "restaurants: owner 新增" on public.restaurants
-  for insert to authenticated with check ((select public.is_owner()));
-create policy "restaurants: owner 修改" on public.restaurants
+create policy "restaurants: 往自己的库里加" on public.restaurants
+  for insert to authenticated with check (board_id = (select public.my_board()));
+create policy "restaurants: 改自己库里的" on public.restaurants
   for update to authenticated
-  using ((select public.is_owner()))
-  with check ((select public.is_owner()));
-create policy "restaurants: owner 删除" on public.restaurants
-  for delete to authenticated using ((select public.is_owner()));
+  using (board_id = (select public.my_board()))
+  with check (board_id = (select public.my_board()));
+create policy "restaurants: 删自己库里的" on public.restaurants
+  for delete to authenticated using (board_id = (select public.my_board()));
 
--- reviews：每人写自己的；owner 可以替另一位 owner 打分（一起吃饭时一个人录入）；
---          owner 可以删除任何评价（管理用）
-create policy "reviews: 所有人可读" on public.reviews
-  for select to anon, authenticated using (true);
-create policy "reviews: 写自己的或 owner 代录" on public.reviews
+-- ---------- 图片 ----------
+-- 公开的 photos 桶：谁都能看图；登录的人只能往自己库的文件夹（库 id/…）里传、删。
+-- 单张最大 20 MB。
+
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('photos', 'photos', true, 20971520,
+        array['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/heic', 'image/heif'])
+on conflict (id) do update
+  set public = excluded.public,
+      file_size_limit = excluded.file_size_limit,
+      allowed_mime_types = excluded.allowed_mime_types;
+
+create policy "photos: 看自己库里的" on storage.objects
+  for select to authenticated
+  using (bucket_id = 'photos' and (storage.foldername(name))[1] = (select public.my_board())::text);
+create policy "photos: 传到自己库里" on storage.objects
   for insert to authenticated
-  with check (
-    user_id = (select auth.uid())
-    or ((select public.is_owner()) and public.is_owner(user_id))
-  );
-create policy "reviews: 改自己的或 owner 代录" on public.reviews
-  for update to authenticated
-  using (
-    user_id = (select auth.uid())
-    or ((select public.is_owner()) and public.is_owner(user_id))
-  )
-  with check (
-    user_id = (select auth.uid())
-    or ((select public.is_owner()) and public.is_owner(user_id))
-  );
-create policy "reviews: 删自己的或 owner 管理" on public.reviews
+  with check (bucket_id = 'photos' and (storage.foldername(name))[1] = (select public.my_board())::text);
+create policy "photos: 删自己库里的" on storage.objects
   for delete to authenticated
-  using (user_id = (select auth.uid()) or (select public.is_owner()));
+  using (bucket_id = 'photos' and (storage.foldername(name))[1] = (select public.my_board())::text);

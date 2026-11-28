@@ -9,4 +9,6 @@ window.FOODRANK_CONFIG = {
   // 可选：账号在背后会变成「账号@这个域名」的内部邮箱（不会真的发邮件）。
   // 一般不用改；只有 Supabase 拒绝这个域名时才换，而且要在大家注册之前定好。
   // accountEmailDomain: 'fromhang2la.app',
+  // 没登录的访客看谁的排行（填用户名）；不填就看餐厅最多的那一份
+  homeUser: 'whj',
 };
