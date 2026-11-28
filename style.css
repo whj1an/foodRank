@@ -281,6 +281,7 @@ dialog.sheet > form { padding-bottom: 0; }
 .field-msg.err { color: var(--danger); }
 .field-msg.ok { color: #7fd1a0; }
 .tabs { display: flex; gap: 4px; margin-bottom: 14px; background: var(--bg); border-radius: var(--radius); padding: 3px; }
+#authLead { margin: -4px 0 14px; } /* 「登录后才能添加餐厅」这类提示和下面的输入框隔开一点 */
 .tabs button { flex: 1; background: transparent; color: var(--muted); padding: 8px; }
 .tabs button.active { background: var(--chip-hover); color: var(--text); }
 

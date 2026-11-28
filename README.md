@@ -49,7 +49,9 @@ Switch with the buttons above the list; each browser remembers its own choice. T
 ## Accounts
 
 - There are two kinds of people: **users** (signed in) and **visitors** (not signed in).
-- To register you enter a **username** (letters and digits only, 3–20 characters, not case-sensitive) and a **password** (at least 6 characters). You sign in with the same username. No email needed.
+- An account is a **username** (letters and digits only, 3–20 characters, not case-sensitive) and a **password** (at least 6 characters). You sign in with the username. No email needed.
+- **Registration is closed by default**: the site only shows a sign-in form, because right now it's just the two of us. To open it, set `allowSignup: true` in `config.js` **and** turn on "Allow new users to sign up" in Supabase (Authentication → Sign In / Providers). Hiding the form alone doesn't stop sign-ups; the Supabase switch is what actually blocks them, so keep it off while registration is closed.
+- To add one account without opening registration: Supabase → **Authentication** → **Users** → **Add user**, with email `username@fromhang2la.app`, a password, and "Auto Confirm User" ticked. That username can sign in right away.
 - Every user has their own list. Visitors can see a list but can't change anything. Which list they see is set by `homeUser` in `config.js`.
 - **Binding**: two bound users share one list. What either of them adds appears in both people's 待评 row, and either can rank it. If both rank at the same time, whoever taps "完成" later wins.
 - **Unbinding**: in the account sheet (bottom bar → "账户"), tap the underlined "已绑定 xxx，取消绑定". Both people keep a full copy of the list as it was, and from then on each has their own.
@@ -75,7 +77,7 @@ Switch with the buttons above the list; each browser remembers its own choice. T
 
 ## 2. Register and bind
 
-1. Open the site, tap "登录 / 注册" (Sign in / Register) at the top right → "注册" (Register), and each of you registers a username and password.
+1. Create both accounts: either add them in Supabase (Authentication → Users → Add user, see "Accounts" above), or temporarily open registration (`allowSignup: true` plus the Supabase switch), register on the site, then close it again.
 2. In the Supabase **SQL Editor**, bind the two accounts (with your own usernames):
 
    ```sql
@@ -113,9 +115,10 @@ From then on, every `git push` updates the site automatically.
 
 ## Things to keep in mind
 
-- The site is publicly viewable: anyone with the URL can see the list, photos and details without signing in, so don't put anything too personal in them. Anyone can also register their own account (with their own separate list).
+- The site is publicly viewable: anyone with the URL can see the list, photos and details without signing in, so don't put anything too personal in them.
+- **Photo location is removed before upload.** Phone photos often record where they were taken (GPS), and photos on the site can be downloaded by anyone. JPG: the GPS data in EXIF is wiped and XMP / IPTC (which can also name a place) is blanked, without recompressing, so the pixels, orientation, colors and file size stay exactly the same. PNG: metadata and text chunks are removed. Other formats (HEIC, WebP…) are converted to JPG (at most 4096 px on the long side), which also makes HEIC viewable outside Safari.
 - Photos are stored at original size. The free Supabase plan includes 1 GB of storage, which is roughly a few hundred phone photos. Each photo also gets a small thumbnail for the list.
-- iPhone photos in HEIC format: Safari usually converts them to JPG when uploading. If a photo can't be opened, the page says so; pick a JPG or PNG instead.
+- If a photo can't be opened by the browser (for example HEIC in Chrome), the page says so; pick a JPG or PNG instead.
 - Free Supabase projects **pause after 7 days without any visits**. Click Restore in the dashboard to bring it back; no data is lost.
 - Use "导出备份" (Export backup) in the account sheet now and then to save a JSON copy (photos are saved as links).
 

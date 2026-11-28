@@ -35,6 +35,9 @@ const REGION_KEY = 'ruiping.region';
 const USERNAME_RE = /^[a-z0-9]{3,20}$/;
 // Supabase 登录必须用邮箱，所以把「用户名」转成一个内部邮箱（不会真的发邮件）
 const EMAIL_DOMAIN = cfg.accountEmailDomain || 'fromhang2la.app';
+// 网页上显不显示「注册」：默认不显示（config.js 里 allowSignup: true 才显示）。
+// 真正拦住别人注册的是 Supabase 后台的开关，这里只是把入口藏起来
+const ALLOW_SIGNUP = cfg.allowSignup === true;
 const BUCKET = 'photos';
 const MAX_PHOTOS = 3;
 const MAX_DETAIL = 120;
@@ -100,6 +103,7 @@ function errMsg(e) {
   if (/Email not confirmed/i.test(m)) return '这个网站还开着「邮箱确认」，请在 Supabase 里关掉 Confirm email';
   if (/email.*invalid|invalid.*email/i.test(m)) return '注册失败：Supabase 不接受内部邮箱格式，请看 README 的「常见问题」';
   if (/Password should be at least/i.test(m)) return '密码至少 6 位';
+  if (/Signups not allowed|signup.*disabled/i.test(m)) return '现在不开放注册';
   if (/rate limit/i.test(m)) return '操作太频繁了，请过一会儿再试';
   if (/exceeded the maximum allowed size|Payload too large/i.test(m)) return `图片太大了，每张最多 ${MAX_FILE_MB} MB`;
   if (/mime type/i.test(m)) return '这种图片格式不支持，请换成 JPG 或 PNG';
@@ -227,7 +231,7 @@ function renderChrome() {
   $('#regionName').textContent = REGIONS[region];
   $$('#regionMenu [data-region]').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.region === region)));
   $$('#styleSeg [data-style]').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.style === ratingStyle)));
-  $('#authBtn').textContent = state.me ? state.me.username : '登录 / 注册';
+  $('#authBtn').textContent = state.me ? state.me.username : (ALLOW_SIGNUP ? '登录 / 注册' : '登录');
   $('#editBtn').hidden = !isMember();
 }
 
@@ -551,33 +555,168 @@ async function addPhotos(files) {
     if (!/^image\//.test(file.type || 'image/')) { toast(`「${file.name}」不是图片`, true); continue; }
     if (file.size > MAX_FILE_MB * 1024 * 1024) { toast(`「${file.name}」太大了，每张最多 ${MAX_FILE_MB} MB`, true); continue; }
     let thumb;
+    let clean;
     try {
       thumb = await makeThumb(file);
     } catch {
       toast('这张图片浏览器打不开（可能是 HEIC 格式），请换成 JPG 或 PNG', true);
       continue;
     }
-    form.photos.push({ kind: 'new', file, thumbBlob: thumb, preview: URL.createObjectURL(thumb) });
+    try {
+      clean = await stripLocation(file); // 上传的是去掉位置信息之后的那份
+    } catch (e) {
+      console.error(e);
+      toast(`「${file.name}」处理失败，请换一张`, true);
+      continue;
+    }
+    form.photos.push({ kind: 'new', file: clean, thumbBlob: thumb, preview: URL.createObjectURL(thumb) });
     renderPhotoSlots();
   }
 }
 
-// 缩略图：长边 360px 的 JPG，只用在标签封面和添加页预览；细节弹窗里看的是原图
-async function makeThumb(file) {
+// 把图片画到画布上再存成 JPG（长边最多 maxEdge 像素）。画布不会带上原图的任何附加信息（位置、时间等）
+async function drawToJpeg(file, maxEdge, quality) {
   const url = URL.createObjectURL(file);
   try {
     const img = new Image();
     img.src = url;
     await img.decode();
-    const s = Math.min(1, THUMB_PX / Math.max(img.naturalWidth, img.naturalHeight));
+    const s = Math.min(1, maxEdge / Math.max(img.naturalWidth, img.naturalHeight));
     const c = document.createElement('canvas');
     c.width = Math.max(1, Math.round(img.naturalWidth * s));
     c.height = Math.max(1, Math.round(img.naturalHeight * s));
     c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-    return await new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('thumb'))), 'image/jpeg', 0.82));
+    return await new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('encode'))), 'image/jpeg', quality));
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+// 缩略图：长边 360px 的 JPG，只用在标签封面和添加页预览；细节弹窗里看的是原图
+const makeThumb = (file) => drawToJpeg(file, THUMB_PX, 0.82);
+
+/* ---------- 上传前去掉照片里的位置信息 ----------
+   手机拍的照片里常常写着拍摄地点（GPS 坐标），而网站上的图片谁都能下载，所以上传前先去掉：
+   - JPG：把 EXIF 里 GPS 那一组清零，XMP / IPTC（也可能写着地点）的内容抹成空白。
+          直接改原文件的字节，不重新压缩：像素、方向、颜色和原图完全一样，文件大小也不变。
+   - PNG：去掉 EXIF 块和文字块（XMP 也存在文字块里）。
+   - GIF：本来就没有位置信息，原样上传。
+   - 其他（HEIC、WebP…）或者文件结构看不懂：重新画成 JPG（长边最多 4096 像素），附加信息全部去掉。
+     HEIC 本来只有 Safari 能显示，转成 JPG 以后大家都能看。 */
+async function stripLocation(file) {
+  const b = new Uint8Array(await file.arrayBuffer());
+  const base = file.name.replace(/\.[^.]*$/, '') || 'photo';
+  if (b[0] === 0xFF && b[1] === 0xD8) {
+    if (scrubJpeg(b)) return new File([b], `${base}.jpg`, { type: 'image/jpeg' });
+  } else if (b[0] === 0x89 && ascii(b, 1, 3) === 'PNG') {
+    const png = stripPng(b);
+    if (png) return new File([png], `${base}.png`, { type: 'image/png' });
+  } else if (ascii(b, 0, 3) === 'GIF') {
+    return file;
+  }
+  const jpg = await drawToJpeg(file, 4096, 0.9);
+  return new File([jpg], `${base}.jpg`, { type: 'image/jpeg' });
+}
+
+const ascii = (b, start, n) => String.fromCharCode(...b.subarray(start, start + n));
+
+// 在 JPG 的字节里原地抹掉位置信息。返回 true = 处理好了；false = 文件结构看不懂（交给重新编码）
+function scrubJpeg(b) {
+  let i = 0;
+  // 一个文件里可能接着好几张图（比如 iPhone 的 HDR 增益图），每张都处理
+  while (i + 1 < b.length && b[i] === 0xFF && b[i + 1] === 0xD8) {
+    i += 2;
+    for (;;) {
+      while (i + 1 < b.length && b[i] === 0xFF && b[i + 1] === 0xFF) i++; // 填充字节
+      if (i + 2 > b.length || b[i] !== 0xFF) return false;
+      const m = b[i + 1];
+      if (m === 0xD9) { i += 2; break; } // 这张图结束（结束标记只有 2 个字节，没有长度）
+      if (i + 4 > b.length) return false;
+      const len = (b[i + 2] << 8) | b[i + 3];
+      const s = i + 4; // 这一段内容的开始
+      const e = i + 2 + len; // 这一段的结束
+      if (len < 2 || e > b.length) return false;
+      if (m === 0xE1 && ascii(b, s, 6) === 'Exif\0\0') {
+        scrubExifGps(b, s + 6, e);
+      } else if (m === 0xE1 || m === 0xED) { // XMP、IPTC 等：保留开头的名字，后面的内容抹成空白
+        let z = s;
+        while (z < e && z < s + 80 && b[z] !== 0) z++;
+        b.fill(m === 0xE1 ? 0x20 : 0x00, Math.min(z + 1, e), e);
+      }
+      if (m === 0xDA) { // 后面是压缩的图像数据：跳过，找下一个标记
+        let j = e;
+        while (j + 1 < b.length && !(b[j] === 0xFF && b[j + 1] !== 0x00 && (b[j + 1] < 0xD0 || b[j + 1] > 0xD7))) j++;
+        if (j + 1 >= b.length) return false;
+        i = j;
+      } else {
+        i = e;
+      }
+    }
+  }
+  // 保险起见：文件后面如果还藏着别的 EXIF（比如附带的小图），也清掉里面的 GPS
+  for (let k = i; k + 10 <= b.length; k++) {
+    if (b[k] === 0xFF && b[k + 1] === 0xE1 && ascii(b, k + 4, 6) === 'Exif\0\0') {
+      scrubExifGps(b, k + 10, Math.min(b.length, k + 2 + ((b[k + 2] << 8) | b[k + 3])));
+    }
+  }
+  return true;
+}
+
+// EXIF 是 TIFF 格式：主图（IFD0）和缩略图（IFD1）里如果有 GPSInfo（0x8825），就把它指向的 GPS 那一组
+// 每一条、以及每一条指向的数据都清零（纬度、经度、海拔、时间都在里面）
+function scrubExifGps(b, t, end) {
+  const le = b[t] === 0x49; // II = 小端，MM = 大端
+  const head = le ? [0x49, 0x49, 0x2A, 0x00] : [0x4D, 0x4D, 0x00, 0x2A];
+  if (head.some((v, k) => b[t + k] !== v)) return;
+  const ok = (o, n) => o >= t && o + n <= end;
+  const u16 = (o) => (le ? b[o] | (b[o + 1] << 8) : (b[o] << 8) | b[o + 1]);
+  const u32 = (o) => (le
+    ? (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24))
+    : ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3])) >>> 0;
+  const SIZE = [0, 1, 1, 2, 4, 8, 1, 1, 2, 4, 8, 4, 8]; // TIFF 每种数据类型一个值占几个字节
+  const wipeIfd = (g) => {
+    if (!ok(g, 2)) return;
+    const n = u16(g);
+    for (let k = 0; k < n; k++) {
+      const ent = g + 2 + k * 12;
+      if (!ok(ent, 12)) break;
+      const size = (SIZE[u16(ent + 2)] || 1) * u32(ent + 4);
+      const off = t + u32(ent + 8);
+      if (size > 4 && ok(off, size)) b.fill(0, off, off + size); // 放不进条目里的数据在别处，一起清零
+      b.fill(0, ent, ent + 12);
+    }
+    b[g] = 0;
+    b[g + 1] = 0; // 条目数改成 0
+  };
+  let ifd = u32(t + 4);
+  for (let round = 0; round < 2 && ifd; round++) {
+    const p = t + ifd;
+    if (!ok(p, 2)) break;
+    const n = u16(p);
+    for (let k = 0; k < n; k++) {
+      const ent = p + 2 + k * 12;
+      if (!ok(ent, 12)) break;
+      if (u16(ent) === 0x8825) wipeIfd(t + u32(ent + 8));
+    }
+    ifd = ok(p + 2 + n * 12, 4) ? u32(p + 2 + n * 12) : 0;
+  }
+}
+
+// PNG：去掉 eXIf（EXIF）、tEXt / zTXt / iTXt（文字，XMP 也存在这里）、tIME 这几种块。看不懂就返回 null
+function stripPng(b) {
+  const DROP = new Set(['eXIf', 'tEXt', 'zTXt', 'iTXt', 'tIME']);
+  const parts = [b.subarray(0, 8)];
+  let i = 8;
+  while (i + 12 <= b.length) {
+    const len = ((b[i] << 24) | (b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3]) >>> 0;
+    const type = ascii(b, i + 4, 4);
+    const end = i + 12 + len;
+    if (end > b.length) return null;
+    if (!DROP.has(type)) parts.push(b.subarray(i, end));
+    i = end;
+    if (type === 'IEND') return new Blob(parts, { type: 'image/png' });
+  }
+  return null;
 }
 
 function extOf(file) {
@@ -869,6 +1008,7 @@ function openAuth(mode = 'login', lead = '') {
 }
 
 function setAuthMode(mode) {
+  if (!ALLOW_SIGNUP) mode = 'login'; // 不开放注册时只有登录
   authMode = mode;
   const f = $('#authForm');
   $$('#authDialog .tabs button').forEach((b) => b.classList.toggle('active', b.dataset.mode === mode));
@@ -1172,7 +1312,8 @@ function bindEvents() {
     $('.count', e.target.parentElement).textContent = `${e.target.value.length}/${MAX_DETAIL}`;
   });
 
-  // 登录 / 注册
+  // 登录 / 注册（不开放注册时，「登录 | 注册」切换整个藏起来）
+  $('#authDialog .tabs').hidden = !ALLOW_SIGNUP;
   $$('#authDialog .tabs button').forEach((b) => b.addEventListener('click', () => setAuthMode(b.dataset.mode)));
   $('#authForm').elements.username.addEventListener('input', checkUsername);
   $('#authForm').elements.password.addEventListener('input', checkPasswordMatch);

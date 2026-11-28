@@ -11,4 +11,8 @@ window.FOODRANK_CONFIG = {
   // accountEmailDomain: 'fromhang2la.app',
   // 没登录的访客看谁的排行（填用户名）；不填就看餐厅最多的那一份
   homeUser: 'whj',
+  // 网页上要不要显示「注册」。false = 只能登录（现在只有你们俩用）。
+  // 想让别人注册：改成 true，并且在 Supabase 后台 Authentication → Sign In / Providers 打开
+  // 「Allow new users to sign up」。只改这里不改后台的话，注册会提示「现在不开放注册」。
+  allowSignup: false,
 };
